@@ -28,27 +28,22 @@ except Exception as e:
 
 
 # Güvenli PDF Plaka Okuma Fonksiyonu
-def pdf_icinden_plaka_oku(uploaded_file) -> str | None:
+def pdf_icinden_plaka_oku(pdf_bytes: bytes) -> str | None:
     try:
-        # Dosyayı hafızaya tam bayt olarak alıyoruz
-        uploaded_file.seek(0)
-        file_bytes = uploaded_file.read()
-        uploaded_file.seek(0)
-
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             tam_metin = ""
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
                     tam_metin += text + "\n"
 
-            # Plaka Regex (34AVB201 veya 34 AVB 201 vb.)
+            # Plaka Regex
             plaka_pattern = r"\b\d{2}\s?[A-Z]{1,3}\s?\d{2,4}\b"
             eslesmeler = re.findall(plaka_pattern, tam_metin)
             if eslesmeler:
                 return eslesmeler[0].replace(" ", "").upper()
     except Exception as e:
-        st.write(f"PDF Okuma Hatası: {e}")
+        st.write(f"PDF Okuma Uyarısı: {e}")
     return None
 
 
@@ -61,14 +56,16 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Toplu Bakım (Excel)",
 ])
 
+# ---------------------------------------------------------
 # SEKME 1: TEKLİ KAYIT
+# ---------------------------------------------------------
 with tab1:
     st.header("Tekli Araç / Evrak Yükleme")
     with st.form("single_vehicle_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             plate_input = (
-                st.text_input("Plaka (Örn: 34AVB201)").strip().upper()
+                st.text_input("Plaka (Örn: 34AVA411)").strip().upper()
             )
             last_km = st.number_input("Son Bakım KM", min_value=0, step=1000)
         with col2:
@@ -96,14 +93,15 @@ with tab1:
             else:
                 license_url, policy_url = None, None
 
+                # Ruhsat Yükleme
                 if license_file:
-                    ext = license_file.name.split(".")[-1]
+                    ext = license_file.name.split(".")[-1].lower()
                     path = f"ruhsat/{plate_input}.{ext}"
                     try:
-                        license_file.seek(0)
+                        file_bytes = license_file.getvalue()
                         supabase.storage.from_("documents").upload(
                             path,
-                            license_file.read(),
+                            file_bytes,
                             file_options={
                                 "upsert": "true",
                                 "content-type": f"image/{ext}",
@@ -115,13 +113,14 @@ with tab1:
                     except Exception as e:
                         st.error(f"Ruhsat yükleme hatası: {e}")
 
+                # Poliçe PDF Yükleme
                 if policy_file:
                     path = f"police/{plate_input}.pdf"
                     try:
-                        policy_file.seek(0)
+                        file_bytes = policy_file.getvalue()
                         supabase.storage.from_("documents").upload(
                             path,
-                            policy_file.read(),
+                            file_bytes,
                             file_options={
                                 "upsert": "true",
                                 "content-type": "application/pdf",
@@ -133,6 +132,7 @@ with tab1:
                     except Exception as e:
                         st.error(f"Poliçe yükleme hatası: {e}")
 
+                # Veritabanı Upsert
                 try:
                     payload = {
                         "plate": plate_input,
@@ -151,7 +151,9 @@ with tab1:
                 except Exception as e:
                     st.error(f"Veritabanı kayıt hatası: {e}")
 
+# ---------------------------------------------------------
 # SEKME 2: TOPLU EVRAK YÜKLEME
+# ---------------------------------------------------------
 with tab2:
     st.header("Toplu Evrak Yükleme")
     doc_type = st.radio(
@@ -170,19 +172,19 @@ with tab2:
             success, fail = 0, 0
             for file in uploaded_files:
                 try:
-                    file.seek(0)
-                    file_bytes = file.read()
+                    # Streamlit dosya içeriğini tam bayt olarak alıyoruz (.getvalue())
+                    file_bytes = file.getvalue()
 
                     if "Ruhsat" in doc_type:
                         plate_name = (
                             os.path.splitext(file.name)[0].strip().upper()
                         )
-                        ext = file.name.split(".")[-1]
+                        ext = file.name.split(".")[-1].lower()
                         storage_path = f"ruhsat/{plate_name}.{ext}"
                         db_field = "license_img_url"
                         content_type = f"image/{ext}"
                     else:
-                        tespit = pdf_icinden_plaka_oku(file)
+                        tespit = pdf_icinden_plaka_oku(file_bytes)
                         plate_name = (
                             tespit
                             if tespit
@@ -192,6 +194,7 @@ with tab2:
                         db_field = "policy_pdf_url"
                         content_type = "application/pdf"
 
+                    # Supabase Storage'a Yükle
                     supabase.storage.from_("documents").upload(
                         storage_path,
                         file_bytes,
@@ -204,6 +207,7 @@ with tab2:
                         "documents"
                     ).get_public_url(storage_path)
 
+                    # DB Güncelleme
                     res = (
                         supabase.table("vehicles")
                         .select("*")
@@ -226,7 +230,9 @@ with tab2:
                 f"Tamamlandı! Başarılı: {success}, Hatalı: {fail}"
             )
 
+# ---------------------------------------------------------
 # SEKME 3: SORGULAMA
+# ---------------------------------------------------------
 with tab3:
     st.header("Plaka Sorgula")
     search_plate = (
@@ -265,7 +271,9 @@ with tab3:
             else:
                 st.warning("Kayıt bulunamadı.")
 
+# ---------------------------------------------------------
 # SEKME 4: EXCEL BAKIM
+# ---------------------------------------------------------
 with tab4:
     st.header("Toplu Bakım Güncelle (Excel)")
     excel_file = st.file_uploader("Excel Seç", type=["xlsx", "xls"])
