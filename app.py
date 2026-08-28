@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import os
 from supabase import create_client
 
@@ -21,7 +22,12 @@ except Exception as e:
 st.title("🏍️ Kurye Araç Kontrol & Evrak Portalı")
 
 # Sekmeler
-tab1, tab2, tab3 = st.tabs(["📝 Tekli Araç / Evrak Kaydı", "📁 Toplu Evrak Yükle", "🔍 Plaka Sorgula"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📝 Tekli Araç / Evrak Kaydı", 
+    "📁 Toplu Evrak Yükle", 
+    "🔍 Plaka Sorgula",
+    "📊 Toplu Bakım (Excel)"
+])
 
 # ---------------------------------------------------------
 # SEKME 1: TEKLİ ARAÇ & EVRAK KAYDI
@@ -80,9 +86,6 @@ with tab1:
 
                 # Veritabanı Kaydı / Güncellemesi
                 try:
-                    # Mevcut kaydı kontrol et
-                    res = supabase.table("vehicles").select("*").eq("plate", plate_input).execute()
-                    
                     data_to_upsert = {
                         "plate": plate_input,
                         "last_service_km": last_km,
@@ -199,3 +202,77 @@ with tab3:
                     st.warning(f"'{search_plate}' plakasına ait kayıt bulunamadı.")
             except Exception as e:
                 st.error(f"Sorgulama sırasında hata oluştu: {e}")
+
+# ---------------------------------------------------------
+# SEKME 4: TOPLU BAKIM GÜNCELLEME (EXCEL)
+# ---------------------------------------------------------
+with tab4:
+    st.header("Excel ile Toplu Bakım KM Güncelleme")
+    st.info("💡 Yükleyeceğiniz Excel dosyasında **Plaka**, **Son Bakım KM** ve **Gelecek Bakım KM** sütunları bulunmalıdır.")
+
+    # Örnek Şablon İndirme Butonu
+    sample_data = {
+        "Plaka": ["06ABC123", "34XYZ987"],
+        "Son Bakım KM": [15000, 22000],
+        "Gelecek Bakım KM": [20000, 27000]
+    }
+    df_sample = pd.DataFrame(sample_data)
+    
+    st.download_button(
+        label="📥 Örnek Excel Şablonunu İndir (CSV)",
+        data=df_sample.to_csv(index=False).encode('utf-8-sig'),
+        file_name="ornek_bakim_tablosu.csv",
+        mime="text/csv"
+    )
+
+    excel_file = st.file_uploader("Excel Dosyası Yükleyin (.xlsx, .xls)", type=["xlsx", "xls"])
+
+    if excel_file:
+        try:
+            df = pd.read_excel(excel_file)
+            st.write("📋 **Yüklenen Veri Önizlemesi:**")
+            st.dataframe(df.head())
+
+            # Sütun Eşleme Seçenekleri
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                plate_col = st.selectbox("Plaka Sütunu", df.columns, index=0 if "Plaka" in df.columns else 0)
+            with col2:
+                last_km_col = st.selectbox("Son Bakım KM Sütunu", df.columns, index=1 if "Son Bakım KM" in df.columns else 0)
+            with col3:
+                next_km_col = st.selectbox("Gelecek Bakım KM Sütunu", df.columns, index=2 if "Gelecek Bakım KM" in df.columns else 0)
+
+            if st.button("Verileri Supabase'e Aktar"):
+                success_count = 0
+                fail_count = 0
+
+                for _, row in df.iterrows():
+                    plate = str(row[plate_col]).strip().upper()
+                    
+                    if not plate or plate == "NAN":
+                        continue
+
+                    try:
+                        last_km = int(row[last_km_col]) if pd.notnull(row[last_km_col]) else 0
+                        next_km = int(row[next_km_col]) if pd.notnull(row[next_km_col]) else 0
+                    except ValueError:
+                        last_km = 0
+                        next_km = 0
+
+                    data_to_upsert = {
+                        "plate": plate,
+                        "last_service_km": last_km,
+                        "next_service_km": next_km
+                    }
+
+                    try:
+                        supabase.table("vehicles").upsert(data_to_upsert, on_conflict="plate").execute()
+                        success_count += 1
+                    except Exception as e:
+                        st.error(f"{plate} güncellenirken hata: {e}")
+                        fail_count += 1
+
+                st.success(f"İşlem Tamamlandı! Başarılı Güncellenen: {success_count}, Hatalı: {fail_count}")
+
+        except Exception as e:
+            st.error(f"Excel okunurken hata oluştu: {e}")
