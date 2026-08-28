@@ -8,8 +8,8 @@ st.set_page_config(page_title="Kurye Araç & Evrak Portalı", page_icon="🏍️
 # 2. Supabase Bağlantısı (Bilgileri secrets üzerinden alır)
 @st.cache_resource
 def init_supabase():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    url = st.secrets["https://qpfooykpqcnqaiupchks.supabase.co"]
+    key = st.secrets["sb_secret_5giAR9HcrcGjIpYheymYuQ_6d0BkjX5"]
     return create_client(url, key)
 
 supabase = init_supabase()
