@@ -6,13 +6,13 @@ import pdfplumber
 import streamlit as st
 from supabase import create_client
 
-# 1. Sayfa Ayarları
+# Sayfa Ayarları
 st.set_page_config(
     page_title="Kurye Araç & Evrak Portalı", page_icon="🏍️", layout="wide"
 )
 
 
-# 2. Supabase Bağlantısı
+# Supabase Bağlantısı
 @st.cache_resource
 def init_supabase():
     url = st.secrets["SUPABASE_URL"].strip()
@@ -27,34 +27,33 @@ except Exception as e:
     st.stop()
 
 
-# Yardımcı Fonksiyon: PDF İçinden Plaka Ayıklama
+# Güvenli PDF Plaka Okuma Fonksiyonu
 def pdf_icinden_plaka_oku(uploaded_file) -> str | None:
     try:
-        # Streamlit UploadedFile objesini BytesIO ile sarmalayarak pdfplumber'a veriyoruz
+        # Dosyayı hafızaya tam bayt olarak alıyoruz
         uploaded_file.seek(0)
-        pdf_bytes = io.BytesIO(uploaded_file.read())
-        uploaded_file.seek(0)  # Okuma sonrası imleci tekrar başa alıyoruz
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)
 
-        with pdfplumber.open(pdf_bytes) as pdf:
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             tam_metin = ""
             for page in pdf.pages:
                 text = page.extract_text()
                 if text:
                     tam_metin += text + "\n"
 
-            # Türkiye plaka formatı regex (Örn: 06ABC123, 34 AB 1234 vb.)
+            # Plaka Regex (34AVB201 veya 34 AVB 201 vb.)
             plaka_pattern = r"\b\d{2}\s?[A-Z]{1,3}\s?\d{2,4}\b"
             eslesmeler = re.findall(plaka_pattern, tam_metin)
             if eslesmeler:
                 return eslesmeler[0].replace(" ", "").upper()
     except Exception as e:
-        st.write(f"PDF okuma hatası: {e}")
+        st.write(f"PDF Okuma Hatası: {e}")
     return None
 
 
 st.title("🏍️ Kurye Araç Kontrol & Evrak Portalı")
 
-# Sekmeler
 tab1, tab2, tab3, tab4 = st.tabs([
     "📝 Tekli Araç / Evrak Kaydı",
     "📁 Toplu Evrak Yükle",
@@ -62,17 +61,14 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Toplu Bakım (Excel)",
 ])
 
-# ---------------------------------------------------------
-# SEKME 1: TEKLİ ARAÇ & EVRAK KAYDI
-# ---------------------------------------------------------
+# SEKME 1: TEKLİ KAYIT
 with tab1:
     st.header("Tekli Araç / Evrak Yükleme")
-
     with st.form("single_vehicle_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             plate_input = (
-                st.text_input("Plaka (Örn: 06ABC123)").strip().upper()
+                st.text_input("Plaka (Örn: 34AVB201)").strip().upper()
             )
             last_km = st.number_input("Son Bakım KM", min_value=0, step=1000)
         with col2:
@@ -80,11 +76,10 @@ with tab1:
                 "Gelecek Bakım KM", min_value=0, step=1000
             )
 
-        st.subheader("Evrak Yükleme (Opsiyonel)")
         col_doc1, col_doc2 = st.columns(2)
         with col_doc1:
             license_file = st.file_uploader(
-                "Ruhsat Fotoğrafı (JPG/PNG)",
+                "Ruhsat Görseli",
                 type=["jpg", "jpeg", "png"],
                 key="single_license",
             )
@@ -99,132 +94,116 @@ with tab1:
             if not plate_input:
                 st.warning("Lütfen plaka giriniz!")
             else:
-                license_url = None
-                policy_url = None
+                license_url, policy_url = None, None
 
-                # Ruhsat Yükleme
                 if license_file:
-                    file_ext = license_file.name.split(".")[-1]
-                    file_path = f"ruhsat/{plate_input}.{file_ext}"
+                    ext = license_file.name.split(".")[-1]
+                    path = f"ruhsat/{plate_input}.{ext}"
                     try:
-                        file_bytes = license_file.read()
+                        license_file.seek(0)
                         supabase.storage.from_("documents").upload(
-                            file_path,
-                            file_bytes,
-                            file_options={"upsert": "true"},
+                            path,
+                            license_file.read(),
+                            file_options={
+                                "upsert": "true",
+                                "content-type": f"image/{ext}",
+                            },
                         )
                         license_url = supabase.storage.from_(
                             "documents"
-                        ).get_public_url(file_path)
+                        ).get_public_url(path)
                     except Exception as e:
                         st.error(f"Ruhsat yükleme hatası: {e}")
 
-                # Poliçe Yükleme
                 if policy_file:
-                    file_path = f"police/{plate_input}.pdf"
+                    path = f"police/{plate_input}.pdf"
                     try:
-                        file_bytes = policy_file.read()
+                        policy_file.seek(0)
                         supabase.storage.from_("documents").upload(
-                            file_path,
-                            file_bytes,
-                            file_options={"upsert": "true"},
+                            path,
+                            policy_file.read(),
+                            file_options={
+                                "upsert": "true",
+                                "content-type": "application/pdf",
+                            },
                         )
                         policy_url = supabase.storage.from_(
                             "documents"
-                        ).get_public_url(file_path)
+                        ).get_public_url(path)
                     except Exception as e:
                         st.error(f"Poliçe yükleme hatası: {e}")
 
-                # Veritabanı Kaydı / Güncellemesi
                 try:
-                    data_to_upsert = {
+                    payload = {
                         "plate": plate_input,
                         "last_service_km": last_km,
                         "next_service_km": next_km,
                     }
                     if license_url:
-                        data_to_upsert["license_img_url"] = license_url
+                        payload["license_img_url"] = license_url
                     if policy_url:
-                        data_to_upsert["policy_pdf_url"] = policy_url
+                        payload["policy_pdf_url"] = policy_url
 
                     supabase.table("vehicles").upsert(
-                        data_to_upsert, on_conflict="plate"
+                        payload, on_conflict="plate"
                     ).execute()
-                    st.success(
-                        f"{plate_input} plakalı araç bilgileri başarıyla"
-                        " kaydedildi!"
-                    )
+                    st.success(f"{plate_input} başarıyla kaydedildi!")
                 except Exception as e:
                     st.error(f"Veritabanı kayıt hatası: {e}")
 
-# ---------------------------------------------------------
 # SEKME 2: TOPLU EVRAK YÜKLEME
-# ---------------------------------------------------------
 with tab2:
     st.header("Toplu Evrak Yükleme")
-    st.info(
-        "💡 Poliçe PDF'lerinde plaka içeriğinden otomatik okunur. Ruhsat"
-        " görsellerinin isimleri **Plaka** olmalıdır (Örn: `06ABC123.jpg`)."
-    )
-
     doc_type = st.radio(
-        "Yüklenecek Evrak Türü", ["Ruhsat Fotoğrafı (JPG/PNG)", "Poliçe (PDF)"]
+        "Evrak Türü", ["Ruhsat Fotoğrafı (JPG/PNG)", "Poliçe (PDF)"]
     )
     uploaded_files = st.file_uploader(
-        "Dosyaları Seçin veya Sürükleyin",
+        "Dosyaları Seçin",
         accept_multiple_files=True,
         type=["jpg", "jpeg", "png"] if "Ruhsat" in doc_type else ["pdf"],
     )
 
     if st.button("Toplu Yüklemeyi Başlat"):
         if not uploaded_files:
-            st.warning("Lütfen dosya seçiniz.")
+            st.warning("Dosya seçilmedi!")
         else:
-            success_count = 0
-            fail_count = 0
-
+            success, fail = 0, 0
             for file in uploaded_files:
                 try:
+                    file.seek(0)
+                    file_bytes = file.read()
+
                     if "Ruhsat" in doc_type:
                         plate_name = (
                             os.path.splitext(file.name)[0].strip().upper()
                         )
-                        file_ext = file.name.split(".")[-1]
-                        storage_path = f"ruhsat/{plate_name}.{file_ext}"
+                        ext = file.name.split(".")[-1]
+                        storage_path = f"ruhsat/{plate_name}.{ext}"
                         db_field = "license_img_url"
-
-                        file.seek(0)
-                        file_bytes = file.read()
-
-                    else:  # Poliçe PDF yüklemesi
-                        # 1. Metinden plaka tespit et
-                        tespit_edilen_plaka = pdf_icinden_plaka_oku(file)
-
-                        # Metinde bulunamazsa dosya adına bak
-                        if tespit_edilen_plaka:
-                            plate_name = tespit_edilen_plaka
-                        else:
-                            plate_name = (
-                                os.path.splitext(file.name)[0].strip().upper()
-                            )
-
+                        content_type = f"image/{ext}"
+                    else:
+                        tespit = pdf_icinden_plaka_oku(file)
+                        plate_name = (
+                            tespit
+                            if tespit
+                            else os.path.splitext(file.name)[0].strip().upper()
+                        )
                         storage_path = f"police/{plate_name}.pdf"
                         db_field = "policy_pdf_url"
+                        content_type = "application/pdf"
 
-                        file.seek(0)
-                        file_bytes = file.read()
-
-                    # Supabase Storage Upload
                     supabase.storage.from_("documents").upload(
                         storage_path,
                         file_bytes,
-                        file_options={"upsert": "true"},
+                        file_options={
+                            "upsert": "true",
+                            "content-type": content_type,
+                        },
                     )
                     public_url = supabase.storage.from_(
                         "documents"
                     ).get_public_url(storage_path)
 
-                    # Veritabanında güncelle veya oluştur
                     res = (
                         supabase.table("vehicles")
                         .select("*")
@@ -239,183 +218,74 @@ with tab2:
                         supabase.table("vehicles").insert(
                             {"plate": plate_name, db_field: public_url}
                         ).execute()
-
-                    success_count += 1
+                    success += 1
                 except Exception as e:
-                    st.error(f"{file.name} yüklenirken hata oluştu: {e}")
-                    fail_count += 1
-
+                    st.error(f"{file.name} yüklenemedi: {e}")
+                    fail += 1
             st.success(
-                "İşlem Tamamlandı! Başarılı:"
-                f" {success_count}, Hatalı: {fail_count}"
+                f"Tamamlandı! Başarılı: {success}, Hatalı: {fail}"
             )
 
-# ---------------------------------------------------------
-# SEKME 3: PLAKA SORGULAMA
-# ---------------------------------------------------------
+# SEKME 3: SORGULAMA
 with tab3:
-    st.header("Plaka ile Araç / Evrak Sorgula")
+    st.header("Plaka Sorgula")
     search_plate = (
         st.text_input("Aranacak Plaka", key="search_input").strip().upper()
     )
-
     if st.button("Sorgula"):
-        if not search_plate:
-            st.warning("Lütfen bir plaka giriniz.")
-        else:
-            try:
-                res = (
-                    supabase.table("vehicles")
-                    .select("*")
-                    .eq("plate", search_plate)
-                    .execute()
-                )
-                if res.data:
-                    vehicle = res.data[0]
-                    st.subheader(f"📋 Araç Detayları: {vehicle.get('plate')}")
+        if search_plate:
+            res = (
+                supabase.table("vehicles")
+                .select("*")
+                .eq("plate", search_plate)
+                .execute()
+            )
+            if res.data:
+                v = res.data[0]
+                st.subheader(f"📋 {v.get('plate')}")
+                c1, c2 = st.columns(2)
+                c1.metric("Son Bakım KM", v.get("last_service_km", 0))
+                c2.metric("Gelecek Bakım KM", v.get("next_service_km", 0))
 
-                    col_info1, col_info2 = st.columns(2)
-                    with col_info1:
-                        st.metric(
-                            "Son Bakım KM", vehicle.get("last_service_km", 0)
+                col_e1, col_e2 = st.columns(2)
+                with col_e1:
+                    if v.get("license_img_url"):
+                        st.image(
+                            v["license_img_url"], use_container_width=True
                         )
-                    with col_info2:
-                        st.metric(
-                            "Gelecek Bakım KM", vehicle.get("next_service_km", 0)
+                    else:
+                        st.info("Ruhsat yok.")
+                with col_e2:
+                    if v.get("policy_pdf_url"):
+                        st.markdown(
+                            f"[📄 Poliçe PDF Aç / İndir]({v['policy_pdf_url']})"
                         )
+                    else:
+                        st.info("Poliçe yok.")
+            else:
+                st.warning("Kayıt bulunamadı.")
 
-                    st.markdown("---")
-                    st.subheader("📄 Evraklar")
-
-                    col_evrak1, col_evrak2 = st.columns(2)
-                    with col_evrak1:
-                        st.write("**Ruhsat Görseli:**")
-                        if vehicle.get("license_img_url"):
-                            st.image(
-                                vehicle["license_img_url"],
-                                use_container_width=True,
-                            )
-                            st.markdown(
-                                "[📷 Ruhsatı Büyük Boyut"
-                                f" Aç]({vehicle['license_img_url']})"
-                            )
-                        else:
-                            st.info("Ruhsat görseli yüklenmemiş.")
-
-                    with col_evrak2:
-                        st.write("**Sigorta / Poliçe PDF:**")
-                        if vehicle.get("policy_pdf_url"):
-                            st.markdown(
-                                "🔗 [📄 Poliçe PDF İndir /"
-                                f" Görüntüle]({vehicle['policy_pdf_url']})"
-                            )
-                        else:
-                            st.info("Poliçe PDF yüklenmemiş.")
-                else:
-                    st.warning(
-                        f"'{search_plate}' plakasına ait kayıt bulunamadı."
-                    )
-            except Exception as e:
-                st.error(f"Sorgulama sırasında hata oluştu: {e}")
-
-# ---------------------------------------------------------
-# SEKME 4: TOPLU BAKIM GÜNCELLEME (EXCEL)
-# ---------------------------------------------------------
+# SEKME 4: EXCEL BAKIM
 with tab4:
-    st.header("Excel ile Toplu Bakım KM Güncelleme")
-    st.info(
-        "💡 Yükleyeceğiniz Excel dosyasında **Plaka**, **Son Bakım KM** ve"
-        " **Gelecek Bakım KM** sütunları bulunmalıdır."
-    )
-
-    sample_data = {
-        "Plaka": ["06ABC123", "34XYZ987"],
-        "Son Bakım KM": [15000, 22000],
-        "Gelecek Bakım KM": [20000, 27000],
-    }
-    df_sample = pd.DataFrame(sample_data)
-
-    st.download_button(
-        label="📥 Örnek Excel Şablonunu İndir (CSV)",
-        data=df_sample.to_csv(index=False).encode("utf-8-sig"),
-        file_name="ornek_bakim_tablosu.csv",
-        mime="text/csv",
-    )
-
-    excel_file = st.file_uploader(
-        "Excel Dosyası Yükleyin (.xlsx, .xls)", type=["xlsx", "xls"]
-    )
-
+    st.header("Toplu Bakım Güncelle (Excel)")
+    excel_file = st.file_uploader("Excel Seç", type=["xlsx", "xls"])
     if excel_file:
-        try:
-            df = pd.read_excel(excel_file)
-            st.write("📋 **Yüklenen Veri Önizlemesi:**")
-            st.dataframe(df.head())
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                plate_col = st.selectbox(
-                    "Plaka Sütunu",
-                    df.columns,
-                    index=0 if "Plaka" in df.columns else 0,
-                )
-            with col2:
-                last_km_col = st.selectbox(
-                    "Son Bakım KM Sütunu",
-                    df.columns,
-                    index=1 if "Son Bakım KM" in df.columns else 0,
-                )
-            with col3:
-                next_km_col = st.selectbox(
-                    "Gelecek Bakım KM Sütunu",
-                    df.columns,
-                    index=2 if "Gelecek Bakım KM" in df.columns else 0,
-                )
-
-            if st.button("Verileri Supabase'e Aktar"):
-                success_count = 0
-                fail_count = 0
-
-                for _, row in df.iterrows():
-                    plate = str(row[plate_col]).strip().upper()
-
-                    if not plate or plate == "NAN":
-                        continue
-
-                    try:
-                        last_km = (
-                            int(row[last_km_col])
-                            if pd.notnull(row[last_km_col])
-                            else 0
-                        )
-                        next_km = (
-                            int(row[next_km_col])
-                            if pd.notnull(row[next_km_col])
-                            else 0
-                        )
-                    except ValueError:
-                        last_km = 0
-                        next_km = 0
-
-                    data_to_upsert = {
-                        "plate": plate,
-                        "last_service_km": last_km,
-                        "next_service_km": next_km,
-                    }
-
-                    try:
-                        supabase.table("vehicles").upsert(
-                            data_to_upsert, on_conflict="plate"
-                        ).execute()
-                        success_count += 1
-                    except Exception as e:
-                        st.error(f"{plate} güncellenirken hata: {e}")
-                        fail_count += 1
-
-                st.success(
-                    "İşlem Tamamlandı! Başarılı Güncellenen:"
-                    f" {success_count}, Hatalı: {fail_count}"
-                )
-
-        except Exception as e:
-            st.error(f"Excel okunurken hata oluştu: {e}")
+        df = pd.read_excel(excel_file)
+        st.dataframe(df.head())
+        if st.button("Verileri Aktar"):
+            for _, row in df.iterrows():
+                try:
+                    p = str(row["Plaka"]).strip().upper()
+                    l_km = int(row["Son Bakım KM"])
+                    n_km = int(row["Gelecek Bakım KM"])
+                    supabase.table("vehicles").upsert(
+                        {
+                            "plate": p,
+                            "last_service_km": l_km,
+                            "next_service_km": n_km,
+                        },
+                        on_conflict="plate",
+                    ).execute()
+                except Exception:
+                    pass
+            st.success("Bakım verileri güncellendi.")
