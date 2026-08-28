@@ -27,7 +27,7 @@ except Exception as e:
     st.stop()
 
 
-# PDF Plaka Okuma (Güvenli Bellek İzolasyonu)
+# PDF Plaka Okuma (Güvenli Bayt İşleme)
 def pdf_icinden_plaka_oku(raw_bytes: bytes) -> str | None:
     try:
         with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
@@ -55,15 +55,15 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Toplu Bakım (Excel)",
 ])
 
+# ---------------------------------------------------------
 # SEKME 1: TEKLİ KAYIT
+# ---------------------------------------------------------
 with tab1:
     st.header("Tekli Araç / Evrak Yükleme")
     with st.form("single_vehicle_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
-            plate_input = (
-                st.text_input("Plaka (Örn: 34AVA411)").strip().upper()
-            )
+            plate_input = st.text_input("Plaka").strip().upper()
             last_km = st.number_input("Son Bakım KM", min_value=0, step=1000)
         with col2:
             next_km = st.number_input(
@@ -95,10 +95,10 @@ with tab1:
                     ext = license_file.name.split(".")[-1].lower()
                     path = f"ruhsat/{plate_input}.{ext}"
                     try:
-                        file_data = license_file.getvalue()
+                        file_bytes = license_file.getvalue()
                         supabase.storage.from_("documents").upload(
+                            file=file_bytes,
                             path=path,
-                            file=file_data,
                             file_options={
                                 "upsert": "true",
                                 "content-type": f"image/{ext}",
@@ -114,10 +114,10 @@ with tab1:
                 if policy_file:
                     path = f"police/{plate_input}.pdf"
                     try:
-                        file_data = policy_file.getvalue()
+                        file_bytes = policy_file.getvalue()
                         supabase.storage.from_("documents").upload(
+                            file=file_bytes,
                             path=path,
-                            file=file_data,
                             file_options={
                                 "upsert": "true",
                                 "content-type": "application/pdf",
@@ -147,7 +147,9 @@ with tab1:
                 except Exception as e:
                     st.error(f"Veritabanı kayıt hatası: {e}")
 
+# ---------------------------------------------------------
 # SEKME 2: TOPLU EVRAK YÜKLEME
+# ---------------------------------------------------------
 with tab2:
     st.header("Toplu Evrak Yükleme")
     doc_type = st.radio(
@@ -166,7 +168,6 @@ with tab2:
             success, fail = 0, 0
             for file in uploaded_files:
                 try:
-                    # Raw Byte çekimi
                     file_bytes = file.getvalue()
 
                     if "Ruhsat" in doc_type:
@@ -176,7 +177,7 @@ with tab2:
                         ext = file.name.split(".")[-1].lower()
                         storage_path = f"ruhsat/{plate_name}.{ext}"
                         db_field = "license_img_url"
-                        mime_type = f"image/{ext}"
+                        content_type = f"image/{ext}"
                     else:
                         tespit = pdf_icinden_plaka_oku(file_bytes)
                         plate_name = (
@@ -186,15 +187,15 @@ with tab2:
                         )
                         storage_path = f"police/{plate_name}.pdf"
                         db_field = "policy_pdf_url"
-                        mime_type = "application/pdf"
+                        content_type = "application/pdf"
 
-                    # Supabase Upload
+                    # Supabase Upload (Zorunlu Content-Type ile)
                     supabase.storage.from_("documents").upload(
-                        path=storage_path,
                         file=file_bytes,
+                        path=storage_path,
                         file_options={
                             "upsert": "true",
-                            "content-type": mime_type,
+                            "content-type": content_type,
                         },
                     )
                     public_url = supabase.storage.from_(
@@ -224,7 +225,9 @@ with tab2:
                 f"Tamamlandı! Başarılı: {success}, Hatalı: {fail}"
             )
 
-# SEKME 3: SORGULAMA
+# ---------------------------------------------------------
+# SEKME 3: SORGULAMA & İNDİRME/AÇMA
+# ---------------------------------------------------------
 with tab3:
     st.header("Plaka Sorgula")
     search_plate = (
@@ -255,15 +258,18 @@ with tab3:
                         st.info("Ruhsat yok.")
                 with col_e2:
                     if v.get("policy_pdf_url"):
+                        pdf_url = v["policy_pdf_url"]
                         st.markdown(
-                            f"[📄 Poliçe PDF Aç / İndir]({v['policy_pdf_url']})"
+                            f"[📄 Poliçe PDF'ini Yeni Sekmede Aç]({pdf_url})"
                         )
                     else:
                         st.info("Poliçe yok.")
             else:
                 st.warning("Kayıt bulunamadı.")
 
+# ---------------------------------------------------------
 # SEKME 4: EXCEL BAKIM
+# ---------------------------------------------------------
 with tab4:
     st.header("Toplu Bakım Güncelle (Excel)")
     excel_file = st.file_uploader("Excel Seç", type=["xlsx", "xls"])
