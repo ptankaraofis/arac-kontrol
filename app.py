@@ -27,7 +27,7 @@ except Exception as e:
     st.stop()
 
 
-# PDF Plaka Okuma (Güvenli Bayt İşleme)
+# PDF Plaka Okuma
 def pdf_icinden_plaka_oku(raw_bytes: bytes) -> str | None:
     try:
         with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
@@ -55,9 +55,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Toplu Bakım (Excel)",
 ])
 
-# ---------------------------------------------------------
 # SEKME 1: TEKLİ KAYIT
-# ---------------------------------------------------------
 with tab1:
     st.header("Tekli Araç / Evrak Yükleme")
     with st.form("single_vehicle_form", clear_on_submit=True):
@@ -90,7 +88,6 @@ with tab1:
             else:
                 license_url, policy_url = None, None
 
-                # Ruhsat Yükleme
                 if license_file:
                     ext = license_file.name.split(".")[-1].lower()
                     path = f"ruhsat/{plate_input}.{ext}"
@@ -110,7 +107,6 @@ with tab1:
                     except Exception as e:
                         st.error(f"Ruhsat yükleme hatası: {e}")
 
-                # Poliçe PDF Yükleme
                 if policy_file:
                     path = f"police/{plate_input}.pdf"
                     try:
@@ -147,9 +143,7 @@ with tab1:
                 except Exception as e:
                     st.error(f"Veritabanı kayıt hatası: {e}")
 
-# ---------------------------------------------------------
 # SEKME 2: TOPLU EVRAK YÜKLEME
-# ---------------------------------------------------------
 with tab2:
     st.header("Toplu Evrak Yükleme")
     doc_type = st.radio(
@@ -189,7 +183,6 @@ with tab2:
                         db_field = "policy_pdf_url"
                         content_type = "application/pdf"
 
-                    # Supabase Upload (Zorunlu Content-Type ile)
                     supabase.storage.from_("documents").upload(
                         file=file_bytes,
                         path=storage_path,
@@ -202,7 +195,6 @@ with tab2:
                         "documents"
                     ).get_public_url(storage_path)
 
-                    # DB Güncelleme
                     res = (
                         supabase.table("vehicles")
                         .select("*")
@@ -225,9 +217,7 @@ with tab2:
                 f"Tamamlandı! Başarılı: {success}, Hatalı: {fail}"
             )
 
-# ---------------------------------------------------------
-# SEKME 3: SORGULAMA & İNDİRME/AÇMA
-# ---------------------------------------------------------
+# SEKME 3: SORGULAMA & İNDİRME / AÇMA (GÜNCELLENEN KISIM)
 with tab3:
     st.header("Plaka Sorgula")
     search_plate = (
@@ -258,18 +248,29 @@ with tab3:
                         st.info("Ruhsat yok.")
                 with col_e2:
                     if v.get("policy_pdf_url"):
-                        pdf_url = v["policy_pdf_url"]
-                        st.markdown(
-                            f"[📄 Poliçe PDF'ini Yeni Sekmede Aç]({pdf_url})"
-                        )
+                        pdf_path = f"police/{v['plate']}.pdf"
+                        try:
+                            # 1. Yöntem: Supabase'den doğrudan bayt indirip Streamlit indirme butonu koyma
+                            pdf_bytes = supabase.storage.from_(
+                                "documents"
+                            ).download(pdf_path)
+                            st.download_button(
+                                label=f"📥 {v['plate']} Poliçe PDF İndir",
+                                data=pdf_bytes,
+                                file_name=f"{v['plate']}_police.pdf",
+                                mime="application/pdf",
+                            )
+                        except Exception:
+                            # 2. Yöntem: Doğrudan URL Bağlantısı
+                            st.markdown(
+                                f"[📄 Poliçeyi Tarayıcıda Aç]({v['policy_pdf_url']})"
+                            )
                     else:
                         st.info("Poliçe yok.")
             else:
                 st.warning("Kayıt bulunamadı.")
 
-# ---------------------------------------------------------
 # SEKME 4: EXCEL BAKIM
-# ---------------------------------------------------------
 with tab4:
     st.header("Toplu Bakım Güncelle (Excel)")
     excel_file = st.file_uploader("Excel Seç", type=["xlsx", "xls"])
