@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import pandas as pd
@@ -27,9 +28,14 @@ except Exception as e:
 
 
 # Yardımcı Fonksiyon: PDF İçinden Plaka Ayıklama
-def pdf_icinden_plaka_oku(pdf_file) -> str | None:
+def pdf_icinden_plaka_oku(uploaded_file) -> str | None:
     try:
-        with pdfplumber.open(pdf_file) as pdf:
+        # Streamlit UploadedFile objesini BytesIO ile sarmalayarak pdfplumber'a veriyoruz
+        uploaded_file.seek(0)
+        pdf_bytes = io.BytesIO(uploaded_file.read())
+        uploaded_file.seek(0)  # Okuma sonrası imleci tekrar başa alıyoruz
+
+        with pdfplumber.open(pdf_bytes) as pdf:
             tam_metin = ""
             for page in pdf.pages:
                 text = page.extract_text()
@@ -40,10 +46,9 @@ def pdf_icinden_plaka_oku(pdf_file) -> str | None:
             plaka_pattern = r"\b\d{2}\s?[A-Z]{1,3}\s?\d{2,4}\b"
             eslesmeler = re.findall(plaka_pattern, tam_metin)
             if eslesmeler:
-                # İlk bulunan plakayı boşluksuz ve büyük harfle döndürür
                 return eslesmeler[0].replace(" ", "").upper()
-    except Exception:
-        pass
+    except Exception as e:
+        st.write(f"PDF okuma hatası: {e}")
     return None
 
 
@@ -153,7 +158,7 @@ with tab1:
                     st.error(f"Veritabanı kayıt hatası: {e}")
 
 # ---------------------------------------------------------
-# SEKME 2: TOPLU EVRAK YÜKLEME (pdfplumber Entegre Edildi)
+# SEKME 2: TOPLU EVRAK YÜKLEME
 # ---------------------------------------------------------
 with tab2:
     st.header("Toplu Evrak Yükleme")
@@ -180,30 +185,22 @@ with tab2:
 
             for file in uploaded_files:
                 try:
-                    file_bytes = file.read()
-
                     if "Ruhsat" in doc_type:
                         plate_name = (
                             os.path.splitext(file.name)[0].strip().upper()
                         )
                         file_ext = file.name.split(".")[-1]
                         storage_path = f"ruhsat/{plate_name}.{file_ext}"
-
-                        supabase.storage.from_("documents").upload(
-                            storage_path,
-                            file_bytes,
-                            file_options={"upsert": "true"},
-                        )
-                        public_url = supabase.storage.from_(
-                            "documents"
-                        ).get_public_url(storage_path)
                         db_field = "license_img_url"
 
+                        file.seek(0)
+                        file_bytes = file.read()
+
                     else:  # Poliçe PDF yüklemesi
-                        # 1. pdfplumber ile PDF metnini okuyup plakayı arıyoruz
+                        # 1. Metinden plaka tespit et
                         tespit_edilen_plaka = pdf_icinden_plaka_oku(file)
 
-                        # İçerikte bulunamazsa dosya adına başvuruyoruz
+                        # Metinde bulunamazsa dosya adına bak
                         if tespit_edilen_plaka:
                             plate_name = tespit_edilen_plaka
                         else:
@@ -212,15 +209,20 @@ with tab2:
                             )
 
                         storage_path = f"police/{plate_name}.pdf"
-                        supabase.storage.from_("documents").upload(
-                            storage_path,
-                            file_bytes,
-                            file_options={"upsert": "true"},
-                        )
-                        public_url = supabase.storage.from_(
-                            "documents"
-                        ).get_public_url(storage_path)
                         db_field = "policy_pdf_url"
+
+                        file.seek(0)
+                        file_bytes = file.read()
+
+                    # Supabase Storage Upload
+                    supabase.storage.from_("documents").upload(
+                        storage_path,
+                        file_bytes,
+                        file_options={"upsert": "true"},
+                    )
+                    public_url = supabase.storage.from_(
+                        "documents"
+                    ).get_public_url(storage_path)
 
                     # Veritabanında güncelle veya oluştur
                     res = (
